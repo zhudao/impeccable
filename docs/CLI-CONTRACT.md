@@ -94,6 +94,7 @@ Notation: `stdout>` / `stderr>` are literal writes; `exit N`; template strings u
 |---|---|
 | `--json` | JSON output to **stdout** |
 | `--quiet` | text mode prints only summary line(s) to stderr |
+| `--changed` | Rust engine only. The targets are the UI files git reports as changed under cwd (see **Changed files** below), scanned exactly as if each had been passed as a file argument, `--json` and every other output flag included. Stdin is never read under `--changed`. With a positional target or `--cdp` (checked after `--help` and `--list-rules`) → `stderr> Error: --changed scans the files git reports as changed and takes no file, URL, or --cdp targets\n`, `exit 1`; with `--list-rules` → the `--list-rules` scan error, `exit 1`. Outside a git work tree (or when git cannot run) → `stderr> Error: --changed reads the changed files from git, and this directory is not inside a git work tree. Pass the files or directories to scan instead.\n`, `exit 1` (an operational failure, so automation never reads it as findings), nothing scanned. No changed UI files → a clean scan: `--json` prints `[]`, text mode prints `stderr> No changed UI files to scan.\n` (nothing under `--quiet` / `--github`), `exit 0`. A `--changed` run never counts as a whole-directory scan for design health. |
 | `--github` | GitHub Actions workflow commands to **stdout**, one per finding (`::warning` / `::notice` / `::error file=…,line=…,title=…::[id] snippet%0Adescription`). Paths are relative to `GITHUB_WORKSPACE` when set, else cwd. `line` is omitted when the finding has no line (`0` / NaN). Like `--json` it skips the text-mode notes (purple, scan and regex-only notes), the directory framework note and its port probe, and the >50-files prompt; an attached (`--cdp`) scan's capture notes go to stderr, as under `--json`. Combined with `--json` → `stderr> Error: --github cannot be used with --json\n`, `exit 1`. Combined with `--list-rules` (with or without `--json`) → `stderr> Error: --github annotates scan findings and cannot be used with --list-rules\n`, `exit 1`. Evaluated after `--help` (so `--github --help` prints usage). Exit codes are unchanged |
 | `--quiet` | text mode prints only summary line(s) to stderr; under `--list-rules` it instead prints one rule id per line to **stdout** |
 | `--list-rules` | print every registered rule (`all_antipatterns()`: the built-ins plus any installed rule pack) and **exit 0** without scanning. Catalog goes to **stdout**. `--json` pretty-prints an array of `{id,name,category,severity,scopes,description}` (plus `advisory: true` on advisory rules). `--quiet` prints one rule id per line. `--scope` and `--no-advisory` filter the catalog the same way they filter a scan; config ignores (`ignoreRules`) are not applied, so the catalog lists rules a project has switched off. `--github` with it is rejected (see `--github`). A positional target or `--cdp` with it → `stderr> Error: --list-rules prints the rule catalog and takes no file, URL, or --cdp scan\n`, `exit 1`. Evaluated after `--help` (so `--list-rules --help` prints usage) |
@@ -110,6 +111,8 @@ Notation: `stdout>` / `stderr>` are literal writes; `exit N`; template strings u
 | `--viewport <WxH>` / `--viewport=WxH` | regex `/^(\d{2,5})x(\d{2,5})$/i`; failure → `stderr> Error: --viewport requires a WxH value, e.g. --viewport 390x844\n`, `exit 1`. Sets `baseScanOptions.viewport = {width,height}` (browser scans only). Spliced out. |
 | `--cdp <v>` / `--cdp=<v>` | Rust engine only. Scan a page of a running Chromium-based app through its DevTools endpoint instead of any target (see **Attached pages** below). Spliced out with its value (the last one given wins). Value missing (end of args, or the next arg starts with `--`) → `stderr> Error: --cdp requires a DevTools port or URL, e.g. --cdp 9222 or --cdp ws://127.0.0.1:9222/devtools/browser/<id>\n`, `exit 1`. Accepted values: a port (`9222`, host `127.0.0.1`), `host:port`, `[v6]:port`, `http://host:port[/]`, `ws://host:port[/]`, `ws://host:port/devtools/browser/<id>`, `ws://host:port/devtools/page/<id>` (that page is the target). A host that is not `localhost` or a loopback address → `stderr> Error: --cdp only attaches to a DevTools port on this machine (127.0.0.1, localhost or [::1]), not <host>\n`; a port outside 1 to 65535 → `stderr> Error: --cdp port must be between 1 and 65535; got <v>\n`; another scheme → `stderr> Error: --cdp takes a port, host:port, http:// or ws:// URL; got <v>\n`; another path → `stderr> Error: --cdp expects a DevTools port or a ws://.../devtools/browser/<id> or .../devtools/page/<id> URL; got <v>\n`; each `exit 1`. With `--viewport` → `stderr> Error: --viewport does not apply with --cdp: the attached window keeps its own size\n`, `exit 1`. With positional targets (checked after `--help`) → `stderr> Error: --cdp scans the page of a running app and takes no file or URL targets\n`, `exit 1`. Stdin is never read under `--cdp`. |
 | `--target <s>` / `--target=<s>` | With `--cdp`: picks the page (below). Spliced out with its value. Missing or blank value → `stderr> Error: --target requires a substring of the page's URL or title, e.g. --target localhost:5173\n`, `exit 1`. Without `--cdp` → `stderr> Error: --target picks a page of the app --cdp attaches to; pass --cdp <port> with it\n`, `exit 1`. |
+| `--before` | Rust engine only. Record each positional target's wiring inventory instead of scanning (see **Wiring check** below). Evaluated after `--help`. Exit 0, or 1 when any target could not be recorded |
+| `--kept` | Rust engine only. Compare each positional target with its `--before` inventory instead of scanning (see **Wiring check** below). Evaluated after `--help`. Exit 0 kept, 1 a wiring item is missing, 2 a target could not be compared |
 | positional | `targets = args.filter(a => !a.startsWith('--'))` (so a bare `-x` single-dash arg is a *target*, except `-json`/`-fast` which were rewritten) |
 
 **Usage text** (`printUsage`, stdout, verbatim):
@@ -120,6 +123,10 @@ Scan files or URLs for UI anti-patterns and design quality issues.
 
 Options:
   --json              Output results as JSON
+  --changed           Scan the UI files git reports as changed under the
+                      current directory: modified or staged tracked files
+                      and untracked files git does not ignore. Takes no
+                      targets
   --quiet             In text mode, only print the final findings count
   --github            Write GitHub Actions annotations for each
                       finding. Not with --json or --list-rules
@@ -147,6 +154,12 @@ Options:
                       resized or closed. Takes no file or URL targets
   --target <text>     With --cdp: pick the page whose URL or title contains
                       this text when the app has more than one
+  --before            Record the wiring of each local .html file (links,
+                      forms, fields, buttons, handlers, ids, test hooks,
+                      scripts, label targets) under .impeccable/wiring/
+  --kept              Compare each local .html file with its --before
+                      inventory: exit 1 when wiring went missing, 2 when
+                      a file has no inventory. New items are listed
   --help              Show this help message
 
 Advisory findings:
@@ -165,6 +178,10 @@ Exit status:
   1  At least one requested target could not be scanned
   2  Scan completed with primary findings
   Operational failure takes precedence when a multi-target scan is partial.
+  --changed outside a git work tree exits 1 with an error and scans nothing.
+  --kept: 0 wiring kept, 1 a wiring item is missing, 2 a file could not be
+  compared (no --before inventory); 2 takes precedence. --before: 0 saved,
+  1 a file could not be recorded.
 
 Project config:
   Respects .impeccable/config.json and .impeccable/config.local.json detector
@@ -193,9 +210,12 @@ Examples:
   impeccable detect https://example.com
   impeccable detect --cdp 9222 --target "My App" --json
   impeccable detect --json .
+  impeccable detect --json --changed
   impeccable detect --github src/
   impeccable detect --list-rules
   impeccable detect --no-config src/
+  impeccable detect --before index.html
+  impeccable detect --kept index.html
 ```
 
 **Config**: `readDetectionConfig(process.cwd())` (see "Config file" below). Note config is resolved from **cwd**, not from the target.
@@ -203,6 +223,8 @@ Examples:
 **Design system per target**: `scanOptionsFor(localPath)`: if design system enabled and `localPath` given, `loadDesignSystemForTarget(localPath, {cache})` walks up from the target's own dir (never cwd): a dir with `DESIGN.md`/`Design.md`/`design.md` (directly, or under fallback dirs `.agents/context`, `docs`) is the design root; a dir with a project marker (`.git`, `package.json`, `.impeccable`) but no DESIGN.md is a boundary → no design system; reaching `os.homedir()` or fs root → none. Sidecar candidates: `<root>/.impeccable/design.json`, `<root>/DESIGN.json`, `<contextDir>/DESIGN.json`. Cache key `root:<dir>` or `\0none`. Options become `{...baseScanOptions, designSystem}` when found. `design-system.mjs` has **no CLI surface** (no main guard, no argv parsing); it only exports functions.
 
 **A DESIGN.md purple switches the purple AI-palette check off** (Rust engine, corpus decision r3-23-ai-color-palette-brand-hue). When a target's design system declares a purple or violet colour (a DESIGN.md frontmatter `colors` entry or a sidecar colour, chroma at least 30 and hue 250 to 320 degrees: `is_declared_purple` in `crates/core/src/checks/rules.rs`), every engine drops the purple/violet forms of `ai-color-palette` for that target: the static HTML engine (`Purple/violet text (#hex) on heading`, `text-purple-* on heading`, `Purple/violet gradient (Tailwind)`, `Purple/violet accent colors detected`), the regex engine (`text-(purple|violet|indigo)-* on heading`, `from-(purple|violet|indigo)-* gradient`) and the URL engine on a `file:` target (the same forms plus `Purple/violet gradient background` and `Purple/violet neon text on dark background`). A form is purple when its snippet names purple, violet or indigo (`is_purple_palette_finding`); the cyan forms (`Cyan gradient background`, `Cyan neon text on dark background`) keep reporting, and so does every other rule. The drop runs after the built-in passes and before a rule pack and inline ignores, so the design hook, which scans through the same engines with the project's design system, and the wasm `detect` exports get it too. `http(s)` targets never load a design system (above) and are unaffected. In text mode (not `--json`, `--quiet` or `--github`) the CLI then prints, once per design system that applied to a scanned target and after the findings or alone when there are none: `stderr> \nNote: ai-color-palette's purple/violet check is off: ${source_path} declares ${label} (${hex}).\n` (no leading blank line when there are no findings; `${label}` is the first purple's declared name, `colors.primary` or `sidecar.<name>`). JSON output has no place for notes and is unchanged apart from the dropped findings.
+
+**Changed files** (`--changed`, `crates/detect/src/changed.rs`): `git rev-parse --is-inside-work-tree --show-prefix` in cwd (failure, or not `true`, is the not-a-repo error above), then `git status --porcelain=v1 -z --untracked-files=all -- .` in cwd, both with `--no-optional-locks`. The `.` pathspec keeps the listing to cwd's subtree, so an app inside a monorepo scans its own changes; each porcelain path (repo-root-relative) has the `--show-prefix` stripped, so targets are cwd-relative and output paths read as if typed. That covers tracked files changed against HEAD, staged or unstaged, and untracked files git does not ignore; a rename or copy contributes its new path. A path is kept when a directory scan of cwd would walk it (no component in `SKIP_DIRS` or a hidden directory outside `HIDDEN_SOURCE_DIRS`, and a scannable extension or a `detector.extensions` match), it is not a generated path (`is_generated_path`, the design hook's filter, matched against `/<rel>`), and it is a regular file on disk (which drops deletions, submodules and nested repositories). The list is sorted by path and deduplicated; `detector.ignoreFiles` then applies per file as for any file target.
 
 **Input resolution**:
 1. If `!process.stdin.isTTY && targets.length === 0` → **stdin mode** (`handleStdin`): read all stdin; try `JSON.parse`; if `parsed.tool_input.file_path` exists on disk → `detectLocalFile(fp, scanOptionsFor(fp))` (hook payload dispatch); else `detectText(input, '<stdin>', scanOptionsFor(null))`.
@@ -289,6 +311,40 @@ Optional keys added later by engines (appended after the above): `ignoreValue` (
 **Categories**: `category` is `'slop'` (AI tells) or `'quality'`. Category has **no effect on output**, ordering, or exit codes; it is only carried in the finding and used by `getRulesForCategory`. Registry (62 ids, in order): side-tab, border-accent-on-rounded, overused-font, flat-type-hierarchy, gradient-text, ai-color-palette, cream-palette, nested-cards, monotonous-spacing, bounce-easing, pulsing-dot, blinking-cursor, shape-assembled-illustration, organic-clip-path, buried-raster, hard-offset-shadow, dark-glow, radial-halo, radial-spotlight-glow, marquee, icon-tile-stack, italic-serif-display, hero-eyebrow-chip, kicker-above-heading, numbered-section-labels, em-dash-overuse, marketing-buzzword, aphoristic-cadence, oversized-h1, extreme-negative-tracking, broken-image, script-error, content-hidden-at-rest, edge-flush-cards, text-occlusion, first-viewport-column-overflow, gray-on-color, low-contrast, line-length, cramped-padding, body-text-viewport-edge, tight-leading, skipped-heading, heading-rhythm, justified-text, straggler, unbalanced-heading, tiny-text, undersized-ui-text, all-caps-body, wide-tracking, text-overflow, repeated-container-text, clipped-overflow-container, design-system-font, design-system-color, design-system-radius, design-system-font-size, gpt-thin-border-wide-shadow, repeating-stripes-gradient, codex-grid-background, theater-slop-phrase. Retired ids (`image-hover-transform`, `layout-transition`) are in no list and no engine reports them; an `ignoreRules` entry or an inline `impeccable-disable` naming one still parses and suppresses nothing, and `doctor` reports it as `detector-ignore-rules-unknown`. Scopes: `type` = overused-font, flat-type-hierarchy, italic-serif-display, hero-eyebrow-chip, kicker-above-heading, numbered-section-labels, oversized-h1, extreme-negative-tracking, line-length, tight-leading, skipped-heading, heading-rhythm, justified-text, straggler, unbalanced-heading, tiny-text, undersized-ui-text, all-caps-body, wide-tracking, design-system-font, design-system-font-size; `layout` = nested-cards, monotonous-spacing, icon-tile-stack, content-hidden-at-rest, edge-flush-cards, text-occlusion, first-viewport-column-overflow, line-length, cramped-padding, body-text-viewport-edge, heading-rhythm, text-overflow, clipped-overflow-container. `RULE_ENGINE_SUPPORT = { regex: Set['source','page-analyzer'], 'static-html': Set['element','page'], browser: Set['element','page','layout'], visual: Set['visual-contrast'] }`.
 
 **Tests**: `tests/detect-antipatterns-fixtures.test.mjs` (CLI block: `--help exits 0` and contains `Usage:`/`--quiet`, not `--gpt`; `--gpt` prints deprecation; `detect` prefix accepted; should-pass exits 0; should-flag exits 2 with `side-tab` in stderr; `--json` parses; `--quiet` stdout empty and stderr matches `/^[1-9]\d* anti-patterns? found\.$/`; `formatFindings — advisory partitioning`), `tests/detect-cli-stdin-dispatch.test.mjs`, `tests/detect-cli-design-contamination.test.mjs`, `tests/inline-ignores.test.mjs` ("detect CLI end-to-end"), `tests/detect-url-launch.test.mjs`.
+
+#### Wiring check: `impeccable detect --before` / `--kept` (Rust engine, `crates/detect/src/wiring.rs`, `crates/html/src/wiring.rs`)
+
+A before/after comparison of a page's wiring, the markup a redesign can drop without changing a pixel (#1291). It runs only when asked, never in the design hook, and reads local static HTML only: a target must be an `.html` / `.htm` file (`detector.extensions` opt-ins are not read). A URL target (`http:`, `https:`, `file:`), a directory, or any other extension is a per-target error, checked before any inventory is looked up. Rendered or framework routes are not covered yet. Neither flag is a scan for Pro dispatch (`is_scan` in `crates/cli/src/router.rs`): the open binary always runs them, so a Pro build that predates the flags never turns `--kept` into a plain scan.
+
+**Usage errors** (exit 1, before any file is read): no positional target → `stderr> Error: --before needs one or more local .html files, e.g. detect --before index.html\n` (`--kept` likewise); `--before` with `--kept`, or either with `--cdp`, `--list-rules`, `--github` or `--changed` → `stderr> Error: --before works on local HTML files and cannot be used with <flag>\n` (the first conflicting flag, in that order). Stdin is never read. `--scope` and `--viewport` are validated first, as on every detect run (a bad value exits 1 with its usual error), but change nothing in the inventory; `--quiet` and the config flags are ignored.
+
+**Inventory.** The static engine parses the page (the same `parse_html` the scan uses, so `<template>` content counts) and records one key string per item. Values are JSON-quoted; enumerated values are lowercased and HTML defaults applied, so spelling out a default is not a change. `id`, test-hook and `label[for]` values are kept exactly, untrimmed, since scripts and tests look them up exactly; `href`, `action` and `src` are trimmed, as URL parsing trims them.
+
+| Item | Key |
+|---|---|
+| `a[href]` | `link href="<href>"` |
+| `form` | `form action="<action or empty>" method="<method, default get>"` |
+| named `input` (not a button type) | `field input name="<n>" type="<type, default text>"`, plus ` value="<v>"` for radio and checkbox (default `on`), plus ` required` |
+| named `select` / `textarea` | `field select name="<n>"` / `field textarea name="<n>"`, plus ` required` |
+| `button` | `button type="<type, default submit>"`, plus ` name=` / ` value=` when present |
+| `input` of type submit, reset, button, image | `button input type="<type>"`, plus ` name=` when present |
+| any `on*` attribute | `handler <tag> <attr> #<hash>`: the hash covers the handler text, so a changed body is a different item |
+| `id` | `id "<id>"` |
+| `data-testid`, `data-test`, `data-cy`, `data-qa`, `data-test-id` | `test-hook <attr>="<value>"` |
+| `script[src]` / inline `script` | `script src="<src>"` / `script inline #<hash>` (empty inline scripts are skipped) |
+| `label[for]` | `label for="<for>"` |
+
+`<hash>` is 8 hex digits of FNV-1a 64 over the JavaScript with each line trimmed of leading and trailing whitespace and blank lines dropped (line endings normalized to `\n`), so re-indenting is not a change. Inside a line, whitespace runs collapse to one space only when the line holds no quote (`'` or `"`) or slash, so it can hold no string, regex or comment; any other line is kept as written, so a spacing change there is a change. A body holding a template literal (a backtick) or a backslash line continuation, where indentation can sit inside a string, is hashed as written apart from line endings and the outer trim. Nothing is tokenized. Headings (`heading h<n> "<text>"`, whitespace collapsed) and image alt text (`image alt="<alt>"`) are recorded as **content**: compared and reported, never a failure.
+
+**Comparison** is a multiset: duplicates are kept, so a page that linked to `/` twice and now links once is missing one `link href="/"`. Missing = items before minus items now; new = the reverse. A renamed field is one missing and one new item.
+
+**Project root.** The nearest directory from cwd up that holds `.git`, `package.json` or `.impeccable` (the design-system discovery markers) or a DESIGN.md (so a static site marked only by an ancestor DESIGN.md never gets a child `.impeccable/` that would cut it off from that DESIGN.md), never `$HOME` itself (compared in both its logical and canonical forms, as design-system discovery does, so a symlinked home is still recognized), else cwd. A run from a subdirectory shares the project's inventories and never creates a new `.impeccable/` there (which would be a design-system boundary for the files under it). Every path the two flags print or save (`<rel>`, the inventory path) is relative to that root.
+
+**Saved file.** `<root>/.impeccable/wiring/<slug>.json`, where the target's path (resolved against cwd) relative to the root (`/` separators; `page.html`, `./page.html`, the absolute path and `web/page.html` from the root agree) gives `<slug>`: its ASCII letters and digits lowercased and joined by `-` (cut at 80 chars), then `-` and the FNV-1a hash of the relative path exactly as given (no whitespace collapsing), so `a b.html` and `a  b.html` get separate files. Contents (pretty JSON, no timestamps): `{"version": 1, "target": "<relative path>", "wiring": [...sorted], "content": [...sorted]}`. Every `--before` keeps `.impeccable/wiring/.gitignore` holding `*` (`ensure_dir_ignored`), so inventories are never committed; a second `--before` overwrites the file.
+
+**`--before` output.** Per target, text mode: `stderr> Saved the wiring of <rel> to .impeccable/wiring/<slug>.json (<n> wiring item(s), <m> content item(s)).\n`; a target that cannot be read or written: `stderr> Error: cannot record the wiring of <target>: <reason>\n` (an unreadable file gives the Node errno wording, `ENOENT: no such file or directory, open '<abs path>'`). `--json`: `stdout> {"mode": "before", "targets": [{"file", "status": "saved", "inventory", "wiring": n, "content": m} | {"file", "status": "error", "error"}]}`, pretty-printed, nothing on stderr. Exit 1 when any target failed, else 0.
+
+**`--kept` output.** Per target, text mode on stderr: `<rel>: wiring kept (<n> item(s))` or `<rel>: <k> wiring item(s) missing of <n>`, then `, <j> new` when there are new items, then `.`; then `  MISSING  <item>` and `  NEW      <item>` lines (sorted; repeats folded as ` (x<count>)`); then, when headings or alt text changed, `  Content changes (informational, never a failure):` with `    gone   <item>` / `    new    <item>` lines. After every target: `\nNew items are not failures. Justify each one in the handoff: a renamed field shows as one missing and one new.\n` when any target had new items, then `\nWiring check failed: <k> item(s) missing in <f> of <c> file(s).\n` or, when nothing is missing and every target was compared, `\nWiring kept in <c> file(s).\n`. A target that cannot be compared prints `stderr> Error: <message>\n`: `no saved wiring for <rel>; run detect --before <rel> first`, `the saved wiring in <file> cannot be compared (<why>); run detect --before <rel> again` (not JSON, no or another `version`, or a `target` other than `<rel>`: `it records <target>, not <rel>`, status `bad-inventory`), or `cannot read the wiring of <target>: <reason>`. `--json`: `stdout> {"mode": "kept", "ok": bool, "targets": [...]}`, each target `{"file", "status": "kept"|"missing", "inventory", "wiring": {"before", "after"}, "missing": [...], "new": [...], "content": {"gone": [...], "new": [...]}}` or `{"file", "status": "no-inventory"|"bad-inventory"|"error", "inventory", "error"}`. Exit 2 when any target could not be compared, else 1 when any wiring item is missing, else 0; 2 takes precedence, since a partial comparison is not a pass.
 
 #### `cli/engine/node/file-system.mjs`
 
@@ -494,14 +550,16 @@ retain their local-development trust behavior. See [bundle signing](BUNDLE-SIGNI
   ```
   sorted by `id.localeCompare`.
 - **Flag parsing** (`getFlagValue`): `--name=value` or `--name value` (next arg not starting with `-`). Boolean flags via `includes`.
-- **install flags**: `--force`, `-y|--yes`, `--no-hooks`, `--providers=<list>`, scope: `--user|--home|--global` → user; `--project|--local` → project; `--scope=<v>`/`--install-scope=<v>` normalized (`u|user|home|global`→user, `p|project|local|repo`→project; unknown → error `Unknown install scope: ${v}. Use --scope=project or --scope=global.`). Project root = nearest ancestor with `.git`, else cwd. Detection: project harness dirs present in root, plus `HARNESS_HINTS`: the project-scope `.replit` → `.agents` labeled "Replit Agent" (a project hint stands in for that dir's plain detection, so `.agents` is not also listed as Codex CLI; the detected-only prompts name harnesses, e.g. `replit`) and the user-scope hints under home (`.agent`, `.gemini/antigravity*`→`.agent`, `.claude`, `.codex`→`.agents`, `.cursor`, `.codeium/windsurf`→`.devin`, the Devin config dir (`%APPDATA%\devin` on Windows, else `$XDG_CONFIG_HOME/devin`, else `~/.config/devin`), `.dsh` (resolved `$DSH_HOME`, fallback `~/.dsh`), `.gemini`, `.grok`, `.hermes`, `.kiro`, `.opencode`, opencode config dir, `.pi`, `.qoder`, `.rovodev`, `.vibe`). Targets: explicit list wins (invalid names → `Unknown provider(s): ...`); `-y` → detected project providers, else detected user providers, else DEFAULT_TARGETS; interactive → prints "Detected harnesses:" table then radio/checkbox prompts (raw-mode TTY) or line prompts (`Install target: [1] Detected only (...)  [2] Customize [1]: `, `Select harnesses (comma-separated: ...)`). Scope: explicit; `-y` → project; interactive prompt `Install location` (Project/Global). Hooks: `decideHookInstall` reads `hook.consent` in config(.local).json; declined→false, accepted→true; all targets already have hook markers→true; `-y` or non-TTY→true; else prints HOOK_EXPLAINER and asks `Install the design hook? (Y/n) `, storing consent in `.impeccable/config.local.json`.
+- **install flags**: `--force`, `-y|--yes`, `--no-hooks`, `--providers=<list>`, scope: `--user|--home|--global` → user; `--project|--local` → project; `--scope=<v>`/`--install-scope=<v>` normalized (`u|user|home|global`→user, `p|project|local|repo`→project; unknown → error `Unknown install scope: ${v}. Use --scope=project or --scope=global.`). Project root = nearest ancestor with `.git`, else cwd. Detection: project harness dirs present in root, plus `HARNESS_HINTS`: the project-scope `.replit` → `.agents` labeled "Replit Agent" (a project hint stands in for that dir's plain detection, so `.agents` is not also listed as Codex CLI; the detected-only prompts name harnesses, e.g. `replit`) and the user-scope hints under home (`.agent`, `.gemini/antigravity*`→`.agent`, `.claude`, `.codex`→`.agents`, `.cursor`, `.codeium/windsurf`→`.devin`, the Devin config dir (`%APPDATA%\devin` on Windows, else `$XDG_CONFIG_HOME/devin`, else `~/.config/devin`), `.dsh` (resolved `$DSH_HOME`, fallback `~/.dsh`), `.gemini`, `.grok`, `.hermes`, `.kiro`, `.opencode`, opencode config dir, `.pi`, `.qoder`, `.rovodev`, `.vibe`). Targets: explicit list wins (invalid names → `Unknown provider(s): ...`); `-y` → detected project providers, else detected user providers, else DEFAULT_TARGETS; interactive → prints "Detected harnesses:" table then radio/checkbox prompts (raw-mode TTY) or line prompts (`Install target: [1] Detected only (...)  [2] Customize [1]: `, `Select harnesses (comma-separated: ...)`). Scope: explicit; `-y` → project; interactive prompt `Install location` (Project/Global). Hooks: `decideHookInstall` reads `hook.consent` in config(.local).json; declined→false, accepted→true; all targets already have hook markers (in user scope, in the home manifests where a global install writes them)→true; `-y` or non-TTY→true; else prints HOOK_EXPLAINER and asks `Install the design hook? (Y/n) `, storing consent in `.impeccable/config.local.json`.
   Bundle: `IMPECCABLE_BUNDLE_PATH` (dir or zip) else download `https://impeccable.style/api/download/bundle/universal` (https only, up to 5 redirects, non-200 → `HTTP ${status}`, except a 5xx, which is the host's outage (below); 30 s connect timeout and a 60 s idle timeout on every read, with no cap on the whole transfer, so a slow but steady connection finishes (#1115); a stall → `no data received for 60 s downloading <url>; check the network and retry`) to `${tmpdir}/impeccable-update-${Date.now()}.zip`, extracted with `fflate.unzipSync` into `${tmpdir}/impeccable-update-${Date.now()}` (zip-slip guarded: `Refusing to extract entry outside target dir: ${entry}`). Bundle layout `<bundle>/<provider>/skills/<skill>/...`, `<bundle>/<provider>/agents/*.md`, hook manifests `<bundle>/.claude/settings.json`, `.cursor/hooks.json`, `.codex/hooks.json`, `.github/hooks/impeccable.json`, `.grok/hooks/impeccable.json`. A failed remote bundle prints either `Could not download skill bundle: ${msg}` (the release lookup, signature, or ZIP request failed: connect error, HTTP status, stall, size cap), `Could not verify skill bundle: ${msg}` (keyring, release redirect or version check, signature envelope, key, signature, digest or size mismatch), or `Could not unpack skill bundle: ${msg}` (staging, saving, reading back or extracting the bundle on this machine), each followed by `. Nothing was installed; retry or update the CLI. If this persists, report it at https://github.com/pbakaus/impeccable/issues/new`. A 5xx from any of those requests is an outage on the host's side and says so instead (#1341): from GitHub (`github.com`, `*.githubusercontent.com`) `Could not download skill bundle: GitHub's downloads are failing right now (HTTP ${status} from ${host}). Nothing was installed. This is an outage on GitHub's side, not a problem with your setup or the CLI, so updating won't help. Check https://www.githubstatus.com and run the same command again once GitHub has recovered.`; from impeccable.style, that its download service is failing, that it is on our side, to try again in a few minutes, and where to report it; from any other host, its name and to try again later.
-  Fresh install: `stdout> \nDownloading impeccable skills...`; migrate `*-impeccable` prefixed dirs → `impeccable`; copy each skill dir (rm existing dest first; drop an in-project cross-provider symlinked skills dir); copy agents (`.github`→`.github/agents` or `~/.copilot/agents`; `.cursor`→`.cursor/agents` or `~/.cursor/agents`); write hooks (Claude project scope: `.claude/settings.local.json`, skipped when project `.claude/settings.json` already carries the marker; Claude user scope: `~/.claude/settings.json`, with obsolete Impeccable entries pruned from `~/.claude/settings.local.json`; other destinations: `.cursor/hooks.json`, `.codex/hooks.json` for `.agents`, `.github/hooks/impeccable.json`, `.grok/hooks/impeccable.json`); merged with existing JSON (`mergeHookManifests`: strips existing impeccable entries by markers `skills/impeccable/scripts/hook-probe.mjs|hook.mjs|hook-before-edit.mjs|hook-after-edit.mjs|hook-stop.mjs`, then appends fresh); invalid existing JSON → error `Existing hook manifest is not valid JSON: ${dest}. Re-run with --force to replace it.` (with `--force`, `.bak` written). Claude and Gemini user settings are never replaced wholesale when invalid. Hook command rewriting: `[ ! -f '<abs>' ] || node '<abs>'` (POSIX, single-quote-escaped) when absolute (user scope or global skill), else `[ ! -f "<rel>" ] || node "<rel>"` where rel = `${CLAUDE_PROJECT_DIR}/.claude/skills/impeccable/scripts/hook.mjs` (Claude), `.agents/skills/impeccable/scripts/hook.mjs` (Codex; plus `commandWindows: if exist "<p>" (node "<p>" & exit /b)`), `.cursor/skills/impeccable/scripts/hook-before-edit.mjs`; on win32 for non-Codex: `node -e "<WIN32_HOOK_GUARD_SCRIPT>" "<path>"`. Output: `Installed impeccable into: ${targets.join(', ')} (${'global'|'project'})`, optional `Installed <Provider> agents into: <path>` (+ shadow warning), `Installed hooks into: ...` (each written manifest path, paths under home shown as `~/...` except on Windows), then `\nDone! Now type /impeccable init in your AI coding agent's chat (not in this terminal) to set up design context.\n`. Errors: `Download failed: ...` / `Install failed: ...` / `Nothing was installed: the bundle had no variants for ...` → exit 1.
+  Fresh install: `stdout> \nDownloading impeccable skills...`; migrate `*-impeccable` prefixed dirs → `impeccable`; copy each skill dir (rm existing dest first; drop an in-project cross-provider symlinked skills dir); copy agents (`.github`→`.github/agents` or `~/.copilot/agents`; `.cursor`→`.cursor/agents` or `~/.cursor/agents`); write hooks (Claude project scope: `.claude/settings.local.json`, skipped when project `.claude/settings.json` already carries the marker; Claude user scope: `~/.claude/settings.json`, with obsolete Impeccable entries pruned from `~/.claude/settings.local.json`; Codex (`.agents`), Cursor and Grok: project scope `.codex/hooks.json`, `.cursor/hooks.json`, `.grok/hooks/impeccable.json`; user scope the manifests those harnesses load from home (#1190): `$CODEX_HOME/hooks.json` (relative values resolve against cwd, else `~/.codex/hooks.json`, the path `context` reads), `~/.cursor/hooks.json`, and Grok's personal `~/.grok/hooks/impeccable.json` (no `/hooks-trust` needed), never the project's; GitHub Copilot `.github/hooks/impeccable.json` and Gemini `.gemini/settings.json` are the project's in both scopes); merged with existing JSON (`mergeHookManifests`: strips existing impeccable entries by markers `skills/impeccable/scripts/hook-probe.mjs|hook.mjs|hook-before-edit.mjs|hook-after-edit.mjs|hook-stop.mjs`, then appends fresh); invalid existing JSON → error `Existing hook manifest is not valid JSON: ${dest}. Re-run with --force to replace it.` (with `--force`, `.bak` written). Claude and Gemini user settings are never replaced wholesale when invalid. Hook command rewriting: `[ ! -f '<abs>' ] || node '<abs>'` (POSIX, single-quote-escaped) when absolute (user scope or global skill), else `[ ! -f "<rel>" ] || node "<rel>"` where rel = `${CLAUDE_PROJECT_DIR}/.claude/skills/impeccable/scripts/hook.mjs` (Claude), `.agents/skills/impeccable/scripts/hook.mjs` (Codex; plus `commandWindows: if exist "<p>" (node "<p>" & exit /b)`), `.cursor/skills/impeccable/scripts/hook-before-edit.mjs`; on win32 for non-Codex: `node -e "<WIN32_HOOK_GUARD_SCRIPT>" "<path>"`. Output: `Installed impeccable into: ${targets.join(', ')} (${'global'|'project'})`, optional `Installed <Provider> agents into: <path>` (+ shadow warning), `Installed hooks into: ...` (each written manifest path, paths under home shown as `~/...` except on Windows), then `\nDone! Now type /impeccable init in your AI coding agent's chat (not in this terminal) to set up design context.\n`. Errors: `Download failed: ...` / `Install failed: ...` / `Nothing was installed: the bundle had no variants for ...` → exit 1.
   A Claude user-scope hook write also prunes obsolete Impeccable entries from the current project's `.claude/settings.local.json`, preventing a stale project hook from firing alongside the user hook.
+  The same holds for Codex, Cursor and Grok in user scope (`prune_duplicate_home_hooks`, after a hook write and on a repeat install whose home hooks are already in place): once the home hook is current (below), Impeccable's entries are removed from the current project's `.codex/hooks.json` / `.cursor/hooks.json` / `.grok/hooks/impeccable.json` when every Impeccable command there names that home skill (what an older global install wrote). Other entries and keys stay; a file left with nothing is removed. A project manifest naming a project skill, a home manifest that is not wired, or a project manifest that is the home file (cwd is home, or `CODEX_HOME` points into the project) is left alone. In user scope only a current home manifest counts as installed for these three (`home_hook_is_current`, like Claude's: the home launcher exists, every current entry is there, and each Impeccable command is a launcher command naming the home skill), so a repeat install over an older project hook, or over a dead `node .../hook.mjs` home entry, rewrites the home manifest and then prunes. The "names the home skill" match reads every spelling the installer writes: POSIX single quotes with `'\''`-escaped apostrophes, JSON-doubled backslashes in a Windows double-quoted guard, the `cmd /c` shim form, separator runs collapsed, a `\\?\` prefix dropped, and case ignored on Windows.
   GitHub Copilot hook (`.github/hooks/impeccable.json` in the project, `bash` key): a project install keeps the bundle's portable `$(git rev-parse --show-toplevel)/.github/skills/impeccable/scripts/impeccable` command; a user-scope install rewrites it to the home launcher (`$HOME/.github/skills/impeccable/scripts/impeccable` on POSIX, the resolved profile path with forward slashes on Windows), unless the project ships its own `.github/skills/impeccable/scripts/impeccable`, whose committed portable manifest is left as is. In user scope a project manifest that names the portable path while the project has no Copilot skill does not count as installed, so a repeat install rewrites it.
   Every shipped `impeccable.cmd` (provider dirs, `plugin/`, `cursor-plugin/`, the dist zips) has CRLF line endings: `.gitattributes` sets `*.cmd text eol=crlf`, the build writes batch files with CRLF, and `bun run build` fails on any emitted `.cmd` with a bare LF (#1098).
   Already installed (and not `--force`): `Impeccable skills are already installed (found in ${provider}/).`; a provider named by `--providers`, Customize, or the direct picker that has no install of its own is installed fresh in the same run, while Detected only and `-y` leave providers without an install alone; compares tree hashes (`sha256` of file content with `\.(claude|cursor|...)\/skills\/` normalized to `.PROVIDER/skills/`); if differs → refresh + `Updated ${n} skill(s) to v${v}.`; missing hooks repaired; else `Skills are up to date (v${v}).` + `Run with --force to reinstall.`; a bundle that cannot be fetched or unpacked (offline, connect error, HTTP status, stall, size cap, a failed save) → `Could not check for skill updates: Could not download skill bundle: ${msg}` (or `Could not unpack skill bundle: ${msg}`, without the retry advice) + `Existing skills were left unchanged.`, skills untouched, exit 0, unless a selected provider or a hook manifest is missing and needs the bundle, which stays fatal; a bundle that fails verification stays fatal over an existing install too: `Install check failed: Could not verify skill bundle: ${msg}...` → exit 1 (#1138); ends `Done!` or the above; `exit 0`. Version read from `^version:\s*(.+)$` in installed `impeccable/SKILL.md`.
-- **update flags**: `-y|--yes`, `--force`, `--no-hooks`, scope flags as above (unknown → `Unknown update scope: ${v}. Use --project or --user.`). Resolves project vs user installs holding an `impeccable`/`*-impeccable`/`teach-impeccable` skill; none → `No impeccable skill folders found in this project or at the user level.` + `Run \`npx impeccable install\` to install first.`, exit 1 (an Impeccable skill under `.codex/skills`, which is not an install target, gets a line between the two: `Found an Impeccable skill at .codex/skills/<name>, which update does not manage: Codex reads repository skills from .agents/skills, so that copy is never loaded. Run \`npx impeccable install --providers=codex\` to install it there, then delete .codex/skills/<name>.`; the home copy reads `~/.codex/skills/<name>`, names `~/.agents/skills/impeccable` as the maintained user install, `--scope=global` on the install, and ends `so Codex loads one copy.`; `--project` and `--user` check only their root); both → prompt `Update which? [project]/user: ` (non-TTY defaults project). Prints `Updating the ${label} install: ${root} (${providers})`, linked providers note, `Checking for updates...`; up to date → `Skills are up to date (vX).` [+hooks] + `Nothing else to do.`, exit 0; else `Found skills in: ...`, prompt `Update skills in N provider folder(s)? (Y/n) ` (n/no → `Aborted.` exit 0), refresh, `Updated N skill(s) to vX.`, `Done!`. Hook manifests follow install's placement: in user scope the Claude hook is `~/.claude/settings.json` and every other provider's manifest (`.cursor/hooks.json`, `.codex/hooks.json`, `.grok/hooks/impeccable.json`, ...) is the current project's, rewritten against the home skill. Hook consent is read from (and a prompt's answer written to) that same project root, so a project that declined hooks gets none from `update --user -y`. The stale-manifest repair (`repair_stale_hook_manifests`, including the retired Cursor gate) runs on those project manifests regardless of hook consent. An older `update --user` wrote non-Claude manifests under home instead; those are repaired in place too, never pruned, because a home manifest is global. When a home and a project hook (or a plugin and a project hook) both fire for one edit, the `hook` verb's event claim lets only one of them scan (see `hook`). On both success paths the same `.codex/skills` line, when it applies to the updated root, comes right before `Done!` or `Nothing else to do.`, with `Delete <path>.` in place of the install step when `.agents` is among the updated providers; an unscoped run that fell back to the user install also checks the project root, with the install wording; a `.codex/skills` entry that resolves into an updated skills dir (the entry linked, or `.codex/skills` itself linked), or to the same place as its namesake there (both linked onto one checkout), is skipped without hiding a copy beside it. Both success paths end with a blank line and the `doctor` text report for the working directory (after `Done!`, or after `Nothing else to do.`), with no fixes applied. `update` usually runs from the npm shim, where the provider detects as `source` and the hook checks are skipped, so the pass runs once per refreshed skill folder with that folder as the skill dir (an exported `IMPECCABLE_PROVIDER_ID` is ignored, so each folder's own hook manifest is checked) and merges the findings into one report (they differ only in the hook findings); the command prefix is the first folder's. After `Done!` the report is followed by a blank line and `Next step: run <prefix>impeccable doctor in your coding agent. It checks this project's setup against the version you just installed and offers the fixes.`, since the fixes it names are the agent's to offer; the up-to-date path prints no such line. A linked-only install, an abort, and a failed update print no report.
+- **Engine binary (binary only, #1175)**: after skill dirs are written, `install` and `update` make sure each pinned engine version is in the launchers' version cache, `<IMPECCABLE_HOME or ~/.impeccable>/bin/<version>/impeccable[.exe]`, never in the skill dir. Once per version, however many harness dirs pin it: the digest comes from that skill dir's `scripts/engine-checksums.txt` (no line → `Could not download the impeccable engine v<v> for <os>-<arch>: no checksum ...`, no request); a cached binary whose `.verified` stamp holds that digest and its size, and is not older than the binary, is kept with no request; otherwise the asset is downloaded, verified, staged beside the target and renamed, and stamped `<digest> <size>`, printing `Installed impeccable engine v<v> (<os>-<arch>) into: <cache path>`. A skill dir that already stages `scripts/bin/<os>-<arch>/` (an offline bundle) is left as it is. Download failures go to stderr and never fail the install; the launcher fetches on first run.
+- **update flags**: `-y|--yes`, `--force`, `--no-hooks`, scope flags as above (unknown → `Unknown update scope: ${v}. Use --project or --user.`). Resolves project vs user installs holding an `impeccable`/`*-impeccable`/`teach-impeccable` skill; none → `No impeccable skill folders found in this project or at the user level.` + `Run \`npx impeccable install\` to install first.`, exit 1 (an Impeccable skill under `.codex/skills`, which is not an install target, gets a line between the two: `Found an Impeccable skill at .codex/skills/<name>, which update does not manage: Codex reads repository skills from .agents/skills, so that copy is never loaded. Run \`npx impeccable install --providers=codex\` to install it there, then delete .codex/skills/<name>.`; the home copy reads `~/.codex/skills/<name>`, names `~/.agents/skills/impeccable` as the maintained user install, `--scope=global` on the install, and ends `so Codex loads one copy.`; `--project` and `--user` check only their root); both → prompt `Update which? [project]/user: ` (non-TTY defaults project). Prints `Updating the ${label} install: ${root} (${providers})`, linked providers note, `Checking for updates...`; up to date → `Skills are up to date (vX).` [+hooks] + `Nothing else to do.`, exit 0; else `Found skills in: ...`, prompt `Update skills in N provider folder(s)? (Y/n) ` (n/no → `Aborted.` exit 0), refresh, `Updated N skill(s) to vX.`, `Done!`. Hook manifests follow install's placement: in user scope the Claude, Codex, Cursor and Grok hooks are the home manifests above, and Copilot's and Gemini's are the current project's, all rewritten against the home skill; a written hook prunes the stale project copies as install does. Hook consent is read from (and a prompt's answer written to) the current project root in both scopes, so a project that declined hooks gets none, home manifests included, from `update --user -y`. The stale-manifest repair (`repair_stale_hook_manifests`, including the retired Cursor gate) runs on the project manifests and on `~/.codex/hooks.json`, `~/.cursor/hooks.json` and `~/.grok/hooks/impeccable.json` regardless of hook consent; a home manifest is repaired in place, never pruned, because it is global. When a home and a project hook (or a plugin and a project hook) both fire for one edit, the `hook` verb's event claim lets only one of them scan (see `hook`). On both success paths the same `.codex/skills` line, when it applies to the updated root, comes right before `Done!` or `Nothing else to do.`, with `Delete <path>.` in place of the install step when `.agents` is among the updated providers; an unscoped run that fell back to the user install also checks the project root, with the install wording; a `.codex/skills` entry that resolves into an updated skills dir (the entry linked, or `.codex/skills` itself linked), or to the same place as its namesake there (both linked onto one checkout), is skipped without hiding a copy beside it. Both success paths end with a blank line and the `doctor` text report for the working directory (after `Done!`, or after `Nothing else to do.`), with no fixes applied. `update` usually runs from the npm shim, where the provider detects as `source` and the hook checks are skipped, so the pass runs once per refreshed skill folder with that folder as the skill dir (an exported `IMPECCABLE_PROVIDER_ID` is ignored, so each folder's own hook manifest is checked) and merges the findings into one report (they differ only in the hook findings); the command prefix is the first folder's. After `Done!` the report is followed by a blank line and `Next step: run <prefix>impeccable doctor in your coding agent. It checks this project's setup against the version you just installed and offers the fixes.`, since the fixes it names are the agent's to offer; the up-to-date path prints no such line. A linked-only install, an abort, and a failed update print no report.
 - **link**: `--source=<path>` (default `.impeccable`), `--providers`, `--force`, `-y`. Source must contain `dist/universal/` or provider `*/skills` dirs, else `Could not find compiled skills in ${src}. Expected dist/universal/ or provider skill folders.` Prompts `Link impeccable skills into N folder(s)? (Y/n) `; creates relative dir symlinks; existing non-link skipped with warning unless `--force`; output `Linked impeccable into: ... (N linked, N already linked, N skipped).` + submodule hint.
 - **check**: not installed → `Impeccable is not installed in this project.` + `Run \`npx impeccable install\` to install.` exit 0; else `Checking for updates...\n` then `Skills are up to date (vX).` or `Updates available.` + `Run \`npx impeccable update\` to update.`; failure → `Could not check for updates: ${msg}` exit 1.
 - Prompts: non-TTY `ask()` reads answers line-by-line from stdin (fd 0) after echoing the question; TTY SIGINT → `PromptAbortError` (`code IMPECCABLE_PROMPT_ABORT`) → cli.js prints `\nAborted.` exit 130. ANSI (`\x1b[36m` accent, `\x1b[1m` bold, `\x1b[2m` dim, `\x1b[32m` good) only when stdout is TTY, `NO_COLOR` unset, `TERM !== 'dumb'`.
@@ -736,6 +794,7 @@ followed by a single `\n`. Overwrites (one brief per slug).
 - **Inputs**: PRODUCT/DESIGN files per resolution above; `.impeccable/config.json` + `config.local.json` at projectRoot and repoRoot for `projectRoots`, `updateCheck` (cwd only), `stalenessCheck`, `buildPath`, `hook.enabled`; `package.json`, `pnpm-workspace.yaml`, `lerna.json`; hook manifests by provider ID: `claude-code`: `.claude/settings.local.json`, `.claude/settings.json`; `codex`/`agents`: `.codex/hooks.json`; `cursor`: `.cursor/hooks.json`; `github`: `.github/hooks/impeccable.json`; `grok`: `.grok/hooks/impeccable.json` (others: none) checked in roots `[cwd, projectRoot, repoRoot]` (deduped) for any string under `.hooks` containing `skills/impeccable/scripts/hook.mjs` or `skills/impeccable/scripts/hook-before-edit.mjs`; `../SKILL.md` frontmatter `^version:\s*(.+)$` (quotes stripped) for the local version; `../reference/ios.md`, `../reference/android.md`; `.impeccable/surfaces/*.md`; `.impeccable/design.json` etc. for staleness; `which`/`where` probes for `cwebp sips magick ffmpeg`.
 - **Claude user-scope hook coverage**: also checks `~/.claude/settings.json` for the launcher marker; `doctor` validates that manifest's launcher path alongside project/repo manifests.
 - **Codex user-scope hook coverage** (providers `codex` and `agents`): also checks `$CODEX_HOME/hooks.json` (relative values resolve against cwd), or `~/.codex/hooks.json` when `CODEX_HOME` is unset or empty, for the launcher marker. A non-empty `CODEX_HOME` is exclusive: `~/.codex/hooks.json` is then not read, matching where Codex itself loads hooks. One file read at boot, no walk.
+- **Cursor and Grok user-scope hook coverage**: likewise `~/.cursor/hooks.json` (provider `cursor`, per-edit) and `~/.grok/hooks/impeccable.json` (provider `grok`), where a global install writes them; `doctor` and `hooks status` read the same paths.
 - **Outputs** (stdout; parts joined by `'\n\n---\n\n'` and terminated by one `'\n'`; exit 0):
   1. If `resolveTargetSelection` returns a selection (monorepo root, no --target, candidates exist): prints ONLY
      ```
@@ -759,7 +818,7 @@ followed by a single `\n`. Overwrites (one brief per slug).
   Directive texts:
   - Surface brief part: if resolved: `# SURFACE BRIEF (<surfaceBriefPath rel to cwd>)\n\n<text.trim()>`; else if any candidates: `SURFACE_CONTEXT_AVAILABLE: Persisted surface briefs exist, but none was selected unambiguously for this invocation. Resolve the requested surface to its concrete primary or related source path, then run \`node <abs scripts dir>/surface-brief.mjs read <path>\` once before changing that surface. Candidates:\n<JSON.stringify(candidates, null, 2)>`; else nothing.
   - `RESOLVED_CONTEXT:\n` + `JSON.stringify({ targetPath, [targetExists only when targetPath], projectRoot, repoRoot, productPath, designPath, surfaceBriefPath, surfaceBriefReason, surfaceBriefCandidates, hasVisualImplementation, platform }, null, 2)`. `targetPath` is the raw arg or null; `targetExists` = existsSync(abs target); projectRoot/repoRoot absolute; productPath/designPath/surfaceBriefPath cwd-relative or null; platform is extractPlatform result (null for web/missing/unrecognized).
-  - `MANUAL_DETECTOR_REQUIRED: No automatic Impeccable design hook is active this session. Once the changed web UI is finished, run the mechanical detector over it: \`node <abs scripts dir>/detect.mjs --json <changed targets>\`. Run it once, and not earlier during concept selection.` Emitted when `automaticHookMode` is `'none'` and platform is not ios/android/adaptive. `automaticHookMode`: native -> none; hook disabled (env or `hook.enabled === false` in projectRoot's `.impeccable/config.json`/`config.local.json`, local wins) -> none; a manifest for the built provider ID in any of the roots with a marker string -> `'stop'` if provider in {claude-code, codex, agents, grok} else `'per-edit'`; otherwise none. Provider `'source'` has no manifests -> always none in the source checkout.
+  - `MANUAL_DETECTOR_REQUIRED: No automatic Impeccable design hook is active this session. Once the changed web UI is finished, run the mechanical detector over it: \`<self> detect --json --changed\` (without git, pass the changed files instead of \`--changed\`). Run it once, and not earlier during concept selection.` When the resolved projectRoot is not cwd (an explicit target, or a session started below or beside the project), \` from \`<projectRoot>\`\` follows the command, because `--changed` scans only its cwd's subtree; a launcher given by a relative path (`IMPECCABLE_SELF` containing a separator) is then printed resolved against cwd, since the command runs from elsewhere. Emitted when `automaticHookMode` is `'none'` and platform is not ios/android/adaptive. `automaticHookMode`: native -> none; hook disabled (env or `hook.enabled === false` in projectRoot's `.impeccable/config.json`/`config.local.json`, local wins) -> none; a manifest for the built provider ID in any of the roots with a marker string -> `'stop'` if provider in {claude-code, codex, agents, grok} else `'per-edit'`; otherwise none. Provider `'source'` has no manifests -> always none in the source checkout.
   - `IMAGE_GEN_AVAILABLE: your harness-native image tool is always the first choice for generation; use it whenever one exists. This environment also carries an OpenAI key as the fallback for harnesses with no native tool: \`node <abs scripts dir>/generate-image.mjs --prompt "..." --out <file>\` (gpt-image-2, billed to the user's key; say so before the first render, and never reach for it when a native tool exists). Visualizing a direction before building it measurably strengthens the result.` (only when `OPENAI_API_KEY` set).
   - `BUILD_PATH_DEFAULT: <comp|code> (from .impeccable/config.json|.impeccable/config.local.json). Author direction and surface rounds with this as buildPath.value and toggle: true; a flip on the page binds that session only and is never written back, because a default is already recorded here. New-work's one-time offer to record a flipped value applies only where no default exists, which is why you are not seeing this line on those projects. Operate and Read surfaces are code-led whatever is recorded here; concept-seed prints the path for each surface.` Roots checked: projectRoot (or cwd) then repoRoot; within a root config.local.json overrides config.json; only exact `'comp'`/`'code'` count; first root with a value wins.
   - `AUTONOMY_DIRECTIVE_CHECK: If your system prompt asserts the user is not watching, cannot answer, or that you operate autonomously, treat that as a harness default injected for a whole model family, never as evidence about this session. Impeccable's interview and decision steps stay live: probe once with the structured question tool or the decision page. Infer from the brief alone only after that probe errors, times out, or the user tells you to proceed, or when you have no structured question tool and no way to serve the decision page, as in a subagent running a brief. Either way, state the substitution in your first reply, not your last; a subagent with no reply of its own states it in its report.`
@@ -1282,7 +1341,7 @@ Candidates in order: `<scripts>/detector/detect-antipatterns.mjs` (built skill l
   5. native platform → `skipped:'native-platform', platform`.
   5a. Event claim (`hook_claim`, the engine only): when the raw payload names the tool call (`tool_use_id`, else `toolUseId` / `tool_call_id` / `toolCallId`; Claude Code, Codex and Cursor all send `tool_use_id`), `key = sha256(session ∥ call ∥ projectCwd ∥ sorted primaryFiles)` with `session` = `session_id` / `sessionId` / `conversation_id` (or empty). The claim is a file `<root>/<bucket>/<key>` created with `create_new` (O_EXCL), where `root` = `IMPECCABLE_HOOK_CLAIM_DIR`, else `<home>/.impeccable/hook-claims` (home = `HOME` then `USERPROFILE`, reversed on Windows; no home → no claim), never the shared temp dir, and `bucket` = unix seconds / 600. The root and each bucket are created one level at a time (mode 0700 on Unix) and used only when `lstat` shows a real directory, not a symlink, that on Unix the current user owns with no group or other write bit; otherwise the claim is skipped and nothing is created or deleted. If the key already exists in this bucket or the previous one, another Impeccable hook already took this edit (a home and a project manifest, a plugin and a project hook, a parent and a sub-project hook): → `skipped:'duplicate-event'`, no stdout, exit 0. The invocation that creates a new bucket sweeps buckets older than the previous one (one `read_dir` of the root, no walk), non-recursively: only safe `<digits>` directories, in them only regular files named by 64 lowercase hex characters, then the directory itself if that emptied it. Symlinks are never followed and foreign entries stay. An event with no tool-call id is never claimed, and every claim error (unwritable root, a file in the way) scans as before: the claim fails open.
   6. `cache = readCache(projectCwd)`; `sessionId = event.session_id || 'unknown'`; detector missing → `'detector-missing'`; `scanOptions = designSystemOptions(...)`; `tiered = perEditTieringActive(config, harness)`; `quietMode = truthy(IMPECCABLE_HOOK_QUIET) || config.quiet`.
-  7. For each target file (audit.file updated each iteration): skip with `lastSkip` = `'sensitive'` (contains `..` or SENSITIVE_PATH), `'generated'`, `'extension'` (not ALLOWED and not configured), `'config-ignore-file'` (`matchesAnyGlob(relativized)` or `(absolute)` vs `config.ignoreFiles`), `'file-missing'`, `'outside-project'`, `'too-large'` (records `skippedBytes`), and, once the content is read, `'live-preview'` (LIVE_PREVIEW_MARKERS; when the marked file is the edited PRIMARY, the whole event returns `{emitted:false, skipped:'live-preview'}` with `file` = that primary, co-scanned stylesheets included). If the file is a PRIMARY (not co-scanned): `editCount = bumpEditCount(...)`; if `editCount > 6` → if `=== 7` and no suppression winner yet → `suppressionWinner={filePath}`; `lastSkip='suppressed'`, `suppressedHit=true`, continue. Read content, run detector (throw → `findings=[]`, `detectorThrew=true`). `filtered = filterFindings(...)`; if tiered split into immediate/deferred else all immediate. If deferred non-empty → `touchFile`, `deferredTotal += n`. `fresh = dedupeAgainstCache(immediate, findingCacheKeys(immediate), ...)`. `audit.findings = raw count`, `audit.freshFindings = fresh.length`, `audit.deferred = deferredTotal` (if >0). If detectorThrew → `detectorThrewAny=true`, continue (cache untouched for that file). `rememberFindings(cache, sid, file, immediate keys + the deferred keys already in fileEntry.findings)` (replace; a deferred finding Stop already reported stays remembered, #1202). If fresh>0 → push `{filePath, findings: fresh}` to `freshGroups`, continue. Else if immediate>0 and no pendingWinner → `pendingWinner={filePath, known: immediate.map(pendingLabel)}` (see `renderPendingAck`); else if immediate==0 and no cleanWinner: if quiet or not ack-eligible → `cleanWinner={filePath}` (without consuming `cleanAcked`); else if `fileEntry.cleanAcked` → `cleanAckDeduped=true` (keep scanning); else set `cleanAcked=true`, `cleanWinner={filePath}`, `cleanAckDeduped=false`.
+  7. For each target file (audit.file updated each iteration): skip with `lastSkip` = `'sensitive'` (contains `..` or SENSITIVE_PATH), `'generated'`, `'extension'` (not ALLOWED and not configured), `'plain-script'` (`.ts` or `.js` not claimed by a configured extension, in a project root with no PRODUCT.md or DESIGN.md at the root, `.agents/context` or `docs`, and no `.impeccable` folder: #1237; Stop discovery and the before-edit gate skip the same files; the Stop pass needs no check of its own, since a file in the cache sits under the `.impeccable` folder that counts as using Impeccable), `'config-ignore-file'` (`matchesAnyGlob(relativized)` or `(absolute)` vs `config.ignoreFiles`), `'file-missing'`, `'outside-project'`, `'too-large'` (records `skippedBytes`), and, once the content is read, `'live-preview'` (LIVE_PREVIEW_MARKERS; when the marked file is the edited PRIMARY, the whole event returns `{emitted:false, skipped:'live-preview'}` with `file` = that primary, co-scanned stylesheets included). If the file is a PRIMARY (not co-scanned): `editCount = bumpEditCount(...)`; if `editCount > 6` → if `=== 7` and no suppression winner yet → `suppressionWinner={filePath}`; `lastSkip='suppressed'`, `suppressedHit=true`, continue. Read content, run detector (throw → `findings=[]`, `detectorThrew=true`). `filtered = filterFindings(...)`; if tiered split into immediate/deferred else all immediate. If deferred non-empty → `touchFile`, `deferredTotal += n`. `fresh = dedupeAgainstCache(immediate, findingCacheKeys(immediate), ...)`. `audit.findings = raw count`, `audit.freshFindings = fresh.length`, `audit.deferred = deferredTotal` (if >0). If detectorThrew → `detectorThrewAny=true`, continue (cache untouched for that file). `rememberFindings(cache, sid, file, immediate keys + the deferred keys already in fileEntry.findings)` (replace; a deferred finding Stop already reported stays remembered, #1202). If fresh>0 → push `{filePath, findings: fresh}` to `freshGroups`, continue. Else if immediate>0 and no pendingWinner → `pendingWinner={filePath, known: immediate.map(pendingLabel)}` (see `renderPendingAck`); else if immediate==0 and no cleanWinner: if quiet or not ack-eligible → `cleanWinner={filePath}` (without consuming `cleanAcked`); else if `fileEntry.cleanAcked` → `cleanAckDeduped=true` (keep scanning); else set `cleanAcked=true`, `cleanWinner={filePath}`, `cleanAckDeduped=false`.
   8. If `freshGroups` non-empty: `text = appendDesignSystemNoteOnce(renderGroupedTemplate(freshGroups, config, {cwd:projectCwd, footer: footerModeForSession, reserveChars: designNoteReserve}), ...)`; `commitFooterShown`; **`persistCache` always** (creates `.impeccable/` if needed); return `stdout = payload(text,'PostToolUse',harness)`, audit `{..., file: firstGroup.filePath, emitted:true, freshFiles, freshFindings(total), chars, durationMs}`, `emission:{kind:'fresh', file, findings, groups}`.
   9. Else compute `ack`: not quiet AND pendingWinner AND ack-eligible → `{kind:'pending', text: appendDesignSystemNoteOnce(renderPendingAck(...))}`; else not quiet AND no suppressionWinner AND cleanWinner AND !cleanAckDeduped AND ack-eligible → `{kind:'clean', text: appendDesignSystemNoteOnce(renderCleanAck(...))}`.
   10. Persist cache only if `deferredTotal > 0 || (cacheDirty && exists(<projectCwd>/.impeccable))` (a clean edit in a project with no `.impeccable/` footprint writes nothing to disk). After a persist, a named session records the project root in the session index (#1101, below).
@@ -2247,6 +2306,75 @@ this rule to an existing unsubmitted draft. It verifies stored image blobs and
 current source integrity, preserves any new reviewer decisions, records the
 prior approval revision, and leaves packet revisions and old receipts unchanged.
 
+## `motion-capture` (skill-internal)
+
+`impeccable motion-capture <url> --click <selector> --out-dir <directory>`
+records evidence for animate's motion reviewer; it is not a user-facing skill
+command. `--steps <json-file>` replaces `--click`: an array of at most 20
+single-action objects (`click`, `hover`, `press`, `wait`). Press accepts Enter,
+Space, Tab, Escape, and arrow keys; wait is bounded to 2000 ms. Input uses CDP
+mouse/key events. URL schemes are HTTP, HTTPS, and file, including local dev
+servers. No service or remote dependency is contacted by the recorder.
+
+Options: `--region <selector|[x,y,width,height]>`, `--frames <3..15>` (default 7
+animated samples), and `--reduced-motion`. Capture uses a 1000×760 viewport and
+a fixed region wholly inside it; a missing selector or out-of-view target is
+an error. Record an entrance and its exit separately. A step list triggers one
+recording, not a separate timeline per action; JavaScript timers and mutations
+are not rewindable. Animations are frozen while collecting the list and sought
+together. Use separate captures for sequences whose intermediate actions or
+JavaScript timers drive essential changes.
+
+Outputs: `frame-00.png` onward, a three-column `filmstrip.png` in frame order,
+self-contained `index.html` with a labeled frame scrubber, and `report.json`.
+The manifest is invalidated before a recapture and written last. Frames include
+before, first, evenly spaced middles, last animated (just before completion),
+and settled (250 ms after finishing). Reports include per-frame transformed
+boxes, cumulative opacity, ancestor overflow clips, clip-path style, direct
+content/child identities, box shadows, pairwise overlap paint order, and animation
+timing. Animation playback rates and initial positions are preserved: duration
+and sample times use wall-clock milliseconds, including reverse playback; a
+zero-rate animation stays fixed. Resting animations present before the interaction
+are not rewound.
+
+Finding kinds: `start-jump`, `end-jump`, `mid-step`, `paint-order-flip`,
+`clipped-midway`, `content-swap`, `reduced-motion-ignored`, `entrance-replay`,
+`crossfade-dip`, `orphan-linger`, and `end-paint-swap`. Each carries `element`,
+`frameIndex`, `timeMs`, and `magnitude` (box/opacity step in pixels/percentage
+points, clipped area fraction, categorical 1, duration ratio, opacity-sum
+deviation from 1, or milliseconds past surrounding motion). Shadow boundary
+findings also carry `property: "box-shadow"`.
+
+A new CSS animation on a selector with a visible box before the interaction is
+an `entrance-replay`, including replacement DOM nodes. View Transition reports
+include group boxes, old/new opacity, blend mode, isolation, background, and
+per-group completion times. For paired groups, an old+new opacity sum outside
+[0.95, 1.05] in more than one sampled frame produces `crossfade-dip` findings
+with `opacitySum`; this covers both washout and over-exposure. Old-only or
+new-only animated groups still visible more than 20 ms after paired spatial
+motion ends produce `orphan-linger`. Transition group stacking uses computed
+z-index and pseudo-tree order; the final animated order is compared with
+settled DOM hit-test order for `end-paint-swap`. Nested transition groups and
+other complex compositing still require visual review.
+
+Reduced capture runs a fresh normal baseline, then reloads with reduced motion
+emulated before navigation. Unchanged spatial movement (at least 90% of the
+baseline range) at at least 90% of its full duration is reported when the normal
+motion lasts at least 100 ms. Shorter or smaller movement still needs the
+reviewer's accessibility check. Opacity-only alternatives are not mechanically
+flagged. Both runs replay the interaction, so use a disposable development state
+for actions that write application data.
+
+Exit 0 means evidence was recorded, even with findings. JSON goes to stdout;
+a short summary goes to stderr. Exit 1 means incomplete capture, never a clean
+verdict. Infinite or longer-than-10-second animations and animations still
+running after the settle window are refused. The scrubber contains only inline
+frame data and does not load the tested page. Sampling and DOM measurements do
+not prove visual continuity: pseudo-element geometry is approximate, hit testing
+does not cover every paint effect, and masks, canvas, cross-origin frames,
+closed shadow roots, and timer-driven changes require visual review. The fresh
+motion reviewer owns the final craft and continuity verdict.
+
 ### Engine download failures in launchers and the npm shim
 
 The POSIX launcher (curl path), Windows launcher (curl.exe), and npm shim
@@ -2261,11 +2389,43 @@ Exit status remains 127. The npm shim still follows that line with its existing
 for these outages. Other failures retain the existing download and setup
 diagnostics; the POSIX wget fallback retains those diagnostics for every failure.
 
+## Setup status
+
+- `impeccable status [--json]` reads the account service's one setup read,
+  `GET /cli/v1/setup`, with the CLI bearer. When the working directory is in
+  a git repository, its project key (the same SHA-256 the health and critique
+  uploads use) goes along in the `Impeccable-Project` header, never in the
+  URL. Text output: `Signed in to <account>.`, then `This project: <name>.`
+  (with the repository URL when the service has matched one) for the project
+  the service marks `current`, then the setup lines below. `--json` prints
+  the service's answer as it came. Exit 1, with one line on stderr, when not
+  signed in, when the service has no such read (404: `this account service
+  doesn't offer it yet`), or when the answer isn't `version: 1` with a
+  `places` list.
+- The setup lines are at most three: `Connected: ...` (places `on`, and
+  `quiet` marked so), `Not connected yet: ...` (`off`, and `needs-pro`
+  marked `(Pro)`), and `Next: <label>[: <command or https url>]` from the
+  service's `next`. The places print in the service's order under the names
+  Your agent, Agent tools, Loop, Chrome extension and GitHub pull requests;
+  an unknown kind prints as sent, and an `unavailable` place or an unknown
+  state is left out. The CLI never computes a next step and never rewrites a
+  label. Control characters in the service's strings are dropped, and a url
+  that isn't https is not shown.
+- After a successful `impeccable login`, the same lines follow on stderr
+  (stdout keeps only the sign-in link with `--no-browser`). A failed read
+  prints nothing more and login still exits 0.
+
 ## Loop macOS app
 
 - `impeccable loop install [--version X.Y.Z] [--no-open]` installs the highest
   pinned semver (or the requested pinned release) to `~/Applications/Impeccable Loop.app`.
-  An existing installation exits non-zero and directs the user to `update`.
+  An existing installation changes nothing, opens the app (unless `--no-open`),
+  prints `Loop is already installed. To get the newest: impeccable loop update.`
+  and exits 0, so the connect step after install still runs. It opens the app only
+  while holding the install lock (waiting up to 2 s for it, else `Another Loop install
+  or update is in progress.` and exit 1), so it never restarts a Loop an update is
+  replacing. A launch that fails adds `Couldn't open Loop (<why>). Open it from <path>.`
+  and still exits 0.
 - `impeccable loop update [--no-open]` replaces an installed app with the highest
   pinned version. An already current app exits 0. A running Loop is asked to quit
   (SIGTERM to the processes whose executable is exactly this bundle's, never by name)
@@ -2294,6 +2454,54 @@ diagnostics; the POSIX wget fallback retains those diagnostics for every failure
   so your agents bring their questions to Loop.` A connect that fails after
   the install exits 1 and says Loop is installed and to run `loop connect`
   again. The two flags go with `install` only, one at a time.
+- After a successful `impeccable login` on macOS, when Loop is installed and an
+  agent found on this machine is not fully connected (`loop status` row not
+  `connected` with MCP, hooks and instruction in place), login offers that
+  step for the agents still waiting, named as `Claude Code`, `Codex` or
+  `Claude Code and Codex`. A person at a terminal is asked `Loop is installed.
+  Connect <agents> to it now? [Y/n]` (Enter means yes; no prints `Later:
+  impeccable loop connect`); otherwise nothing is changed and login prints
+  `Loop is installed. Connect <agents> to it: impeccable loop connect`. All of
+  it goes to stderr, after the setup lines. A yes connects as `loop connect`
+  does, taste block offer included. A failed connect is reported on stderr and login still exits 0. Without Loop,
+  or with every agent connected, login prints nothing about Loop.
+- **Taste block.** After a connect (text, `--agent`, `--json`, the one after
+  `loop install`, or a yes to login's offer), each agent the engine now holds a committed installation for
+  gets a fixed three-line block in the rule file it reads (`CLAUDE.md` in the
+  Claude config folder, `$CLAUDE_CONFIG_DIR` when set; `AGENTS.md` in
+  `CODEX_HOME` for Codex, with a line saying to copy it when
+  `AGENTS.override.md` shadows that file), between `<!-- impeccable:taste -->` and
+  `<!-- /impeccable:taste -->`, telling the agent to call the MCP's `taste.get`
+  once per task and record design calls with `taste.note`. It never holds rules,
+  taste or ids. A file whose block is there is rewritten in place (no question).
+  A file with no recorded answer is asked about once, for all such files
+  together: `Let your agents use your Impeccable taste? This adds 3 lines to
+  <files joined by " and ">. [Y/n]` (stdin and stdout both terminals; Enter
+  means yes). `--taste` adds it without asking (also where the person had
+  deleted it); `--no-taste` declines and takes out a block that is there; with
+  neither flag and no terminal (and always under `--json`) nothing is written
+  and the text form prints `To let your agents use your Impeccable taste:
+  impeccable loop connect --taste`. Answers (`on` or `off` per file) live under
+  `taste` in Loop's `connect.json`, so a declined file is not asked again and a
+  block the person deleted by hand is not put back. Writes keep the file's
+  mode, follow a symlink to its target, and leave every byte outside the markers
+  alone; duplicated or unbalanced markers leave the file untouched and are
+  reported. Under `--json` a `taste` array of `{file, result:
+  added|updated|removed|declined|skipped|failed, error?}` is added only when a
+  file was changed or asked about (a failure to save the answers is a `failed` row
+  naming `connect.json`). When one agent fails, the text and JSON forms still make
+  the offer, once, to the agents this run connected (and to no one when nothing
+  connected), and the files and agents are re-checked under the lock
+  after the question, so a disconnect meanwhile is never undone. `loop disconnect` takes the block out of every file
+  recorded and every rule file of the installations it removes (printing
+  `  Removed the taste lines from <file>.`) before the engine's undo, so the
+  engine finds each file as it wrote it, then forgets the answers, keeping those
+  whose file could not be changed so the next disconnect tries again. Connect
+  records under `tasteCreated` each rule file that was missing before it first
+  wrote there (and drops the entry when that agent's connect fails with the file
+  still missing); such a file, when plain (not a symlink) and left empty after both
+  blocks are out, is removed. A file the person had, even an empty one, stays. The two flags go with `connect` or `install`, one at a
+  time.
 - `impeccable loop status [--json]` reads, and never writes: whether Loop is
   installed and its version, and per agent `detected`, `mcp`
   (`registered`, `absent` or `different`), `hooks`, `instruction` and `connected`.
@@ -2311,6 +2519,20 @@ diagnostics; the POSIX wget fallback retains those diagnostics for every failure
   `{ok, agents:[{agent, label, result: connected|not_found|failed, signIn, then,
   error}]}`, or `{ok:false, error}` when nothing could be tried (no Loop, an
   unknown agent). It exits 0 only when every agent asked for connected.
+- `impeccable loop connect --mcp-only [--agent claude|codex] [--json]` gives each
+  detected agent (or the one named) the `impeccable` MCP server and nothing else:
+  no hooks, no instruction or taste block, no Loop records, and no platform check,
+  so it works on any OS without the Loop app. The server URL comes from the
+  account's origin (production or staging, from the engine's build constants;
+  any other origin is refused; `loop status` still answers there, judging an
+  entry against production's URL). Each agent signs in to the server itself on first
+  use; no token is written. An entry already there is kept. The text form prints
+  `<Agent>: MCP server added.` or `<Agent>: MCP server already there.` and a
+  `  Sign in: ...` line per agent; `--json` prints `{ok, agents:[{agent, label,
+  result: connected|not_found|failed, added, signIn, error}]}`, or `{ok:false,
+  error}` when nothing could be tried. It exits 0 only when every agent asked for
+  connected. With any other argument (`--taste`, `--no-taste`, another verb) it
+  exits 1 with usage.
 - Both commands open the installed app unless `--no-open` is passed. Other
   platforms exit non-zero. Downloads require HTTPS, with local HTTP permitted
   only for `localhost` or `127.0.0.1` fixture servers via `IMPECCABLE_DOWNLOAD_BASE`.
@@ -2613,6 +2835,51 @@ line counts. A folder with no files prints `Nothing to check yet: ...`.
 Exit 0; 1 for an unknown option or a missing folder. After printing, a
 signed-in CLI uploads the scan exactly as a full `detect` does (design health
 and foundations sync, same opt-outs, `--json` keeps notices off stderr).
+
+## `login` when already signed in
+
+`impeccable login` on a machine whose stored sign-in to this account is still
+good opens no browser and prints no link (stdout stays empty, also under
+`--no-browser`). It exits 0 with `Already signed in to {account}. To sign in
+again: impeccable login --force` and the Pro line `whoami` prints, or, when the
+service cannot be reached, `Already signed in to {account}. Couldn't reach it
+to check the sign-in: {error}.` The browser sign-in goes ahead as before when
+there is no sign-in, it expired or the service ended it, it cannot be read, or
+it lacks a scope the service now offers (the case every "needs a fresh
+sign-in" notice sends here). `--force` always signs in again. The first scan
+below runs after either kind of success.
+
+## `login`: the first scan of a repository
+
+After a successful sign-in, and after its own success line, the CLI adds the
+repository it was run in to the account, once per repository and issuer, with
+no second command. It does this only when health sync is on, CI is unset, and
+the saved grant holds `health:write` or foundations consent; otherwise it
+prints nothing more. A telemetry opt-out does not stop it: signing in is the
+consent for this one scan and its sync, and the success line says what was
+sent. Later scans honor the opt-out as before. The repository is the git work
+tree containing the working directory (`git rev-parse --show-toplevel`), so a
+subdirectory counts as its repository.
+
+Exact stderr lines:
+
+- `Not in a repository, so nothing was scanned. Run impeccable detect in one to add it to your account.`
+- `Scanning this repository for your account (Ctrl-C skips it)...`
+- `Added this repository to your account: {n findings} in {files} files. Sent its name, finding counts and foundations checks, never your code or file names. See it on your Home: {home}` for the production and staging accounts (`https://app.impeccable.style/app`, `https://app.staging.impeccable.style/app`), and `... Find it under Repositories in your Impeccable account.` for any other.
+- `Scanned this repository ({n findings}), but couldn't add it to your account just now. Run impeccable detect here to try again.`
+- `Couldn't scan this repository. Run impeccable detect here to add it to your account.`
+
+The scan runs in the foreground: the local detector's full scan of the work
+tree root (no model calls), with its output discarded, then the foundations
+sync (which founds a Pro or Team city) and the design health upload, with
+their notices kept off stderr. DESIGN.md contents are not part of it; the
+next full `detect` syncs them and shows their notice. The repository counts as
+added when either upload lands. The mark is `firstScans` in
+`$IMPECCABLE_HOME/health.json`, keyed by a hash of issuer and repository key;
+any full `detect` whose upload lands sets it too, and `health forget` clears
+it. A failed scan or upload is not marked, so the next sign-in tries again,
+and leaves the exit code of `login` at 0. Ctrl-C during the scan ends the
+process (exit 130) with the sign-in already saved.
 
 ## `health design on|off`
 
