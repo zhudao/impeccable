@@ -18,6 +18,7 @@ pub mod http;
 pub mod oauth;
 pub mod plans;
 pub mod prototypes;
+pub mod receipt;
 pub mod pro;
 pub mod session;
 pub mod setup;
@@ -217,6 +218,11 @@ fn plain_for_the_run(args: &[String], io: &mut Io) {
         io.env.insert("IMPECCABLE_NO_BROWSER".to_string(), "1".to_string());
     }
 }
+
+/// Whether Impeccable suggests signing in to someone who isn't signed in: install's
+/// offer (or its one-line hint) and the signed-out line after a saved critique or audit.
+/// Off, both say nothing; `login` and everything a stored sign-in does are unchanged.
+pub const OFFER_SIGN_IN: bool = false;
 
 /// The sign-in `install` offers at its end. Only a fresh sign-in reaches here (the
 /// offer is made only when none is stored), and it prints what `login` prints.
